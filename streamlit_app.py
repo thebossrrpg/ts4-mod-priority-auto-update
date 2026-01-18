@@ -166,11 +166,7 @@ url_input = st.text_input("URL do mod")
 
 if st.button("Analisar"):
     try:
-        raw_html = fetch_page(url)
-
-        # segue o fluxo normal
-        raw_text = extract_text(raw_html)
-        result = analyze_with_gemini(raw_text, url)
+        result = phase1_analyze_url(url_input)
 
         st.success("Análise concluída")
         st.json(result)
