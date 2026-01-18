@@ -57,9 +57,7 @@ def fetch_page(url: str) -> str:
 # =========================
 
 def lm_read_mod(source: str, url: str, raw_text: str) -> dict:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-
-    model = genai.GenerativeModel(GEMINI_MODEL)
+    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
     prompt = f"""
 You are a parser. You DO NOT classify mods.
@@ -80,15 +78,17 @@ Rules:
 Source: {source}
 URL: {url}
 
-TEXT:
-\"\"\"
+===== BEGIN PAGE TEXT =====
 {raw_text[:MAX_TEXT_CHARS]}
-\"\"\"
+===== END PAGE TEXT =====
 """
 
-    response = model.generate_content(
-        prompt,
-        generation_config={"temperature": 0}
+    response = client.models.generate_content(
+        model="gemini-1.5-flash-latest",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0
+        )
     )
 
     return json.loads(response.text)
