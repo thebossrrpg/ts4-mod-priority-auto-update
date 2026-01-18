@@ -4,18 +4,18 @@ import re
 import json
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
-from google import genai
-from google.genai import types
 
 
 # =========================
 # CONFIG
 # =========================
 
-st.set_page_config(page_title="TS4 Mod Analyzer — Phase 1", layout="centered")
+st.set_page_config(
+    page_title="TS4 Mod Analyzer — Phase 1",
+    layout="centered"
+)
 
 MAX_TEXT_CHARS = 12000
-GEMINI_MODEL = "gemini-1.5-flash"
 
 
 # =========================
@@ -29,20 +29,11 @@ def detect_source(url: str) -> str:
         return "patreon"
     if "tumblr.com" in domain:
         return "tumblr"
+    if "itch.io" in domain:
+        return "itch"
     if domain:
         return "website"
     return "unknown"
-
-
-def clean_text(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-
-    text = soup.get_text(separator="\n")
-    text = re.sub(r"\n{2,}", "\n", text)
-    return text.strip()
 
 
 def fetch_page(url: str) -> str:
@@ -63,72 +54,61 @@ def fetch_page(url: str) -> str:
     return response.text
 
 
-# =========================
-# GEMINI READER (FASE 1)
-# =========================
+def clean_text(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
 
-def lm_read_mod(source: str, url: str, raw_text: str) -> dict:
-    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
 
-    prompt = f"""
-You are a parser. You DO NOT classify mods.
-You ONLY extract factual information.
-
-Return ONLY valid JSON with the following fields:
-- mod_name
-- creator
-- functional_summary
-- confidence ("high", "medium", "low")
-- notes (array of short strings)
-
-Rules:
-- If information is unclear, use null.
-- Do NOT invent data.
-- Focus only on what the mod DOES in-game.
-
-Source: {source}
-URL: {url}
-
-===== BEGIN PAGE TEXT =====
-{raw_text[:MAX_TEXT_CHARS]}
-===== END PAGE TEXT =====
-"""
-
-    response = client.models.generate_content(
-    model="models/gemini-2.0-flash",
-    contents=prompt,
-    config=types.GenerateContentConfig(
-        temperature=0
-    )
-)
-
-    return json.loads(response.text)
+    text = soup.get_text(separator="\n")
+    text = re.sub(r"\n{2,}", "\n", text)
+    return text.strip()
 
 
 # =========================
-# FASE 1 ORCHESTRATOR
+# FALLBACK ANALYZER (NO LLM)
+# =========================
+
+def fallback_read_mod(raw_text: str, url: str) -> dict:
+    """
+    Analyzer mínimo para garantir que o app funcione
+    mesmo sem LLM.
+    """
+    return {
+        "mod_name": "Unknown mod",
+        "creator": None,
+        "functional_summary": raw_text[:800],
+        "confidence": "low",
+        "notes": [
+            "LLM indisponível ou desativado.",
+            "Resumo gerado apenas por extração de texto.",
+            f"URL: {url}"
+        ]
+    }
+
+
+# =========================
+# PHASE 1 ORCHESTRATOR
 # =========================
 
 def phase1_analyze_url(url: str) -> dict:
     source = detect_source(url)
+
     html = fetch_page(url)
     raw_text = clean_text(html)
 
-    lm_data = lm_read_mod(
-        source=source,
-        url=url,
-        raw_text=raw_text
-    )
+    # 🔹 Aqui o LLM entra APENAS se existir no futuro
+    lm_data = fallback_read_mod(raw_text, url)
 
     result = {
         "source": source,
         "url": url,
         "mod_name": lm_data.get("mod_name"),
         "creator": lm_data.get("creator"),
-        "raw_text": raw_text,
         "functional_summary": lm_data.get("functional_summary"),
         "confidence": lm_data.get("confidence"),
-        "notes": lm_data.get("notes", [])
+        "notes": lm_data.get("notes", []),
+        "raw_text_preview": raw_text[:1000]
     }
 
     assert_phase1_output(result)
@@ -141,10 +121,10 @@ def assert_phase1_output(data: dict):
         "url",
         "mod_name",
         "creator",
-        "raw_text",
         "functional_summary",
         "confidence",
-        "notes"
+        "notes",
+        "raw_text_preview"
     }
 
     assert set(data.keys()) == required_keys
@@ -157,26 +137,38 @@ def assert_phase1_output(data: dict):
 # =========================
 
 st.title("TS4 Mod Analyzer — Phase 1")
+
 st.markdown(
-    "Cole uma **URL de mod** (Patreon, Tumblr ou site). "
-    "O app **apenas lê e descreve** o mod."
+    """
+Cole uma **URL de mod** (Patreon, Tumblr, Itch.io ou site do criador).
+
+🔹 Nesta fase, o app:
+- acessa a página
+- extrai o texto
+- gera um resumo funcional mínimo
+- **não classifica**
+- **não depende de LLM**
+"""
 )
 
 url_input = st.text_input("URL do mod")
 
 if st.button("Analisar"):
-    try:
-        result = phase1_analyze_url(url_input)
+    if not url_input.strip():
+        st.warning("Cole uma URL válida.")
+    else:
+        try:
+            result = phase1_analyze_url(url_input)
 
-        st.success("Análise concluída")
-        st.json(result)
+            st.success("Análise concluída (modo seguro)")
+            st.json(result)
 
-    except PermissionError:
-        st.warning(
-            "A fonte bloqueia leitura automática. "
-            "Isso é comum no CurseForge. "
-            "Tente uma página Patreon ou site do criador."
-        )
+        except PermissionError:
+            st.warning(
+                "A fonte bloqueia leitura automática (403).\n\n"
+                "Isso é comum no CurseForge.\n"
+                "Tente Patreon, Tumblr, Itch.io ou site do criador."
+            )
 
-    except Exception as e:
-        st.error(f"Erro inesperado: {e}")
+        except Exception as e:
+            st.error(f"Erro inesperado: {e}")
